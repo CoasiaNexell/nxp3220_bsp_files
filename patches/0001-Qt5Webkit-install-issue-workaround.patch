@@ -1,0 +1,28 @@
+From 260e086cc6bffb13397e52ae16a027b3d9a94bc5 Mon Sep 17 00:00:00 2001
+From: suker <suker@nexell.co.kr>
+Date: Wed, 19 Sep 2018 13:29:06 +0900
+Subject: [PATCH] Qt5Webkit install issue workaround
+
+---
+ recipes-qt/qt5/qtwebkit_git.bb | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ mode change 100644 => 100755 recipes-qt/qt5/qtwebkit_git.bb
+
+diff --git a/recipes-qt/qt5/qtwebkit_git.bb b/recipes-qt/qt5/qtwebkit_git.bb
+old mode 100644
+new mode 100755
+index 78ca1f5..4b82b0d
+--- a/recipes-qt/qt5/qtwebkit_git.bb
++++ b/recipes-qt/qt5/qtwebkit_git.bb
+@@ -71,7 +71,7 @@ EXTRA_QMAKEVARS_PRE += "${QTWEBKIT_DEBUG}"
+ do_install_append() {
+     # Remove paths to workdir, qtwebkit is dead now, so I won't spend extra time trying to prevent this
+     # from some .prl or .prf file like for other modules
+-    sed -i 's@-Wl,-no-whole-archive -L${B}[^ ]* @ @g' ${D}${libdir}/pkgconfig/Qt5WebKit.pc
++#    sed -i 's@-Wl,-no-whole-archive -L${B}[^ ]* @ @g' ${D}${libdir}/pkgconfig/Qt5WebKit.pc
+ }
+ 
+ # remove default ${PN}-examples* set in qt5.inc, because they conflicts with ${PN} from separate webkit-examples recipe
+-- 
+1.9.1
+
