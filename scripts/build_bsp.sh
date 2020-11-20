@@ -21,18 +21,19 @@ declare -A BUILD_CONFIG_TARGET=(
 	["MAKE_CONFIG"]=""	# default config (defconfig) for make build
 	["MAKE_TARGET"]=""	# make build target names for make build
 	["MAKE_OPTION"]=""	# make option
+	["MAKE_NOT_CLEAN"]=""	# do not make clean "yes"
 	["MAKE_JOBS"]=" "	# build jobs number (-j n)
 	["CROSS_TOOL"]=" "	# crosstool compiler path to make for this target
 	["RESULT_FILE"]=""	# name of make built imag to copy to resultdir, copy after post command
 	["RESULT_NAME"]=""	# copy name to RESULT_DIR
-	["SCRIPT_PRE"]=" "	# pre script before make build.
+	["SCRIPT_PREV"]=" "	# previous script before make build.
 	["SCRIPT_POST"]=""	# post script after make build before copy 'RESULT_FILE' done.
 	["SCRIPT_LATE"]=""	# late script after copy 'RESULT_FILE' done.
-	["SCRIPT_CLEAN"]=" "	# clean script.
+	["SCRIPT_CLEAN"]=" "	# clean script for clean command.
 )
 
 declare -A BUILD_STAGE=(
-	["pre"]=true		# execute script 'SCRIPT_PRE'
+	["prev"]=true		# execute script 'SCRIPT_PREV'
 	["make"]=true		# make with 'MAKE_PATH' and 'MAKE_TARGET'
 	["copy"]=true		# execute copy with 'RESULT_FILE and RESULT_NAME'
 	["post"]=true		# execute script 'SCRIPT_POST'
@@ -55,15 +56,16 @@ function print_format() {
 	echo -e "\t\t\t MAKE_PATH      : <source path to the make build>,"
 	echo -e "\t\t\t MAKE_CONFIG    : <defconfig for the make build>,"
 	echo -e "\t\t\t MAKE_TARGET    : <targets for the make build, separator is ';'>,"
+	echo -e "\t\t\t MAKE_NOT_CLEAN : <do not make clean "yes">"
 	echo -e "\t\t\t MAKE_OPTION    : <make option>,"
 	echo -e "\t\t\t MAKE_JOBS      : <make build jobs number (-j n)>,"
 	echo -e "\t\t\t CROSS_TOOL     : <cross compiler(CROSS_COMPILE) path for the make build>,"
 	echo -e "\t\t\t RESULT_FILE    : <names of build imag to copy to 'RESULT_DIR', separator is ';'>,"
 	echo -e "\t\t\t RESULT_NAME    : <copy names to 'RESULT_DIR', separator is ';'>,"
-	echo -e "\t\t\t SCRIPT_PRE     : <pre script before make build>,"
+	echo -e "\t\t\t SCRIPT_PREV     : <previous script before make build>,"
 	echo -e "\t\t\t SCRIPT_POST    : <post script after make build before copy 'RESULT_FILE' done>,"
 	echo -e "\t\t\t SCRIPT_LATE    : <late script after copy 'RESULT_FILE' done>,"
-	echo -e "\t\t\t SCRIPT_CLEAN   : <clean shell command > \","
+	echo -e "\t\t\t SCRIPT_CLEAN   : <clean script for clean command> \","
 }
 
 function usage() {
@@ -89,7 +91,7 @@ function usage() {
 	for i in "${!BUILD_STAGE[@]}"; do
 		echo -n " '$i'";
 	done
-	echo -e  "\n\t\t stage order : pre > make > post > copy > late"
+	echo -e  "\n\t\t stage order : prev > make > post > copy > late"
 	echo -e  "\t-m\t build only manual target 'BUILD_MANUAL'"
 	echo ""
 	echo " menuconfig:"
@@ -155,6 +157,8 @@ function kill_progress () {
 		echo ""
 	fi
 }
+
+trap kill_progress EXIT
 
 function print_env () {
 	echo -e "\n\033[1;32m BUILD STAT         = $BUILD_CONFIG_STAT\033[0m";
@@ -376,14 +380,14 @@ function exec_shell () {
 		cmd="$(echo "$cmd" | sed 's/\s\s*/ /g')"
 		cmd="$(echo "$cmd" | sed 's/^[ \t]*//;s/[ \t]*$//')"
 		cmd="$(echo "$cmd" | sed 's/\s\s*/ /g')"
-		fnc=$(echo $cmd| cut -d' ' -f1)
+		fnc=$($(echo $cmd| cut -d' ' -f1) 2>/dev/null | grep -q 'function')
 		unset IFS
 
 		msg "\n $> $cmd"
 		rm -f "$log"
 		[[ $DBG_VERBOSE == false ]] && run_progress;
 
-		if type "$fnc" 2>/dev/null | grep -q 'function'; then
+		if $fnc; then
 			if [[ $DBG_VERBOSE == false ]]; then
 				$cmd >> "$log" 2>&1
 			else
@@ -446,21 +450,21 @@ function exec_make () {
 	return $ret
 }
 
-function run_script_pre () {
+function do_script_prev () {
 	local target=$1
 
-	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_PRE"]} ]] ||
+	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_PREV"]} ]] ||
 	   [[ $BUILD_CLEANALL == true ]] ||
-	   [[ ${BUILD_STAGE["pre"]} == false ]]; then
+	   [[ ${BUILD_STAGE["prev"]} == false ]]; then
 		return;
 	fi
 
-	if ! exec_shell "${BUILD_CONFIG_TARGET["SCRIPT_PRE"]}" "$target"; then
+	if ! exec_shell "${BUILD_CONFIG_TARGET["SCRIPT_PREV"]}" "$target"; then
 		exit 1;
 	fi
 }
 
-function run_make_target () {
+function do_make_target () {
 	local target=$1
 	local command=$BUILD_COMMAND
 	local path=${BUILD_CONFIG_TARGET["MAKE_PATH"]}
@@ -541,16 +545,26 @@ function run_make_target () {
 
 	# make clean
 	if [[ ${mode["clean"]} == true ]]; then
-		exec_make "-C $path clean" "$target"
-		[[ $command == clean ]] && exit 0;
+		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != "yes" ]]; then
+			exec_make "-C $path clean" "$target"
+		fi
+		if [[ $command == clean ]]; then
+			do_script_clean "$target"
+			exit 0;
+		fi
 	fi
 
 	# make distclean
 	if [[ ${mode["distclean"]} == true ]]; then
-		exec_make "-C $path distclean" "$target"
+		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != "yes" ]]; then
+			exec_make "-C $path distclean" "$target"
+		fi
 		[[ $command == distclean ]] || [[ $BUILD_CLEANALL == true ]] && rm -f "$verfile";
 		[[ $BUILD_CLEANALL == true ]] && return;
-		[[ $command == distclean ]] && exit 0;
+		if [[ $command == distclean ]]; then
+			do_script_clean "$target"
+			exit 0;
+		fi
 	fi
 
 	# make defconfig
@@ -583,7 +597,7 @@ function run_make_target () {
 	fi
 }
 
-function run_script_post () {
+function do_script_post () {
 	local target=$1
 
 	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_POST"]} ]] ||
@@ -597,7 +611,7 @@ function run_script_post () {
 	fi
 }
 
-function run_make_result () {
+function do_make_result () {
 	local path=${BUILD_CONFIG_TARGET["MAKE_PATH"]}
 	local file=${BUILD_CONFIG_TARGET["RESULT_FILE"]}
 	local dir=${BUILD_CONFIG_ENV["RESULT_DIR"]}
@@ -628,7 +642,7 @@ function run_make_result () {
 	done
 }
 
-function run_script_late () {
+function do_script_late () {
 	local target=$1
 
 	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_LATE"]} ]] ||
@@ -642,13 +656,11 @@ function run_script_late () {
 	fi
 }
 
-function run_script_clean () {
-	local target=$1
+function do_script_clean () {
+	local target=$1 command=$BUILD_COMMAND
 
-	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_CLEAN"]} ]] ||
-	   [[ $BUILD_CLEANALL == false ]]; then
-		return;
-	fi
+	[[ -z ${BUILD_CONFIG_TARGET["SCRIPT_CLEAN"]} ]] && return;
+	[[ $command != *"clean"* ]] && return;
 
 	if ! exec_shell "${BUILD_CONFIG_TARGET["SCRIPT_CLEAN"]}" "$target"; then
 		exit 1;
@@ -664,14 +676,12 @@ function build_target () {
 	if ! mkdir -p "${BUILD_CONFIG_ENV["RESULT_DIR"]}"; then exit 1; fi
 	if ! mkdir -p "$BUILD_LOG_DIR"; then exit 1; fi
 
-	run_script_pre "$target"
-
-	run_make_target "$target"
-	run_script_post "$target"
-	run_make_result "$target"
-
-	run_script_late "$target"
-	run_script_clean "$target"
+	do_script_prev "$target"
+	do_make_target "$target"
+	do_script_post "$target"
+	do_make_result "$target"
+	do_script_late "$target"
+	do_script_clean "$target"
 }
 
 function build_run () {
@@ -727,7 +737,7 @@ function setup_config_script () {
 	BUILD_CONFIG_IMAGE=("${BUILD_IMAGES[@]}");
 }
 
-function get_avail_configs () {
+function listup_avail_config () {
 	local table=$1	# parse table
 	local dir=$BUILD_CONFIG_DIR
 	local deli=$BUILD_CONFIG_PREFIX
@@ -751,7 +761,7 @@ function get_avail_configs () {
 	done
 }
 
-function get_build_config () {
+function parse_config_script () {
 	local file=$BUILD_CONFIG_STAT
 	local str
 
@@ -765,7 +775,7 @@ function get_build_config () {
 	BUILD_CONFIG_SCRIPT="${ret# *}"
 }
 
-function set_build_config () {
+function store_config_script () {
 	local file=$BUILD_CONFIG_STAT
 	local config=$BUILD_CONFIG_SCRIPT
 
@@ -809,7 +819,7 @@ function menu_save () {
 	if ! (whiptail --title "Save/Exit" --yesno "Save" 8 78); then
 		exit 1;
 	fi
-	set_build_config
+	store_config_script
 }
 
 function parse_args () {
@@ -855,8 +865,8 @@ fi
 
 if [[ -z $BUILD_CONFIG_SCRIPT ]]; then
 	build_config_list=
-	get_avail_configs build_config_list
-	get_build_config
+	listup_avail_config build_config_list
+	parse_config_script
 	if [[ $* == *"menuconfig"* && $BUILD_COMMAND != "menuconfig" ]]; then
 		menu_config "$build_config_list" "config" BUILD_CONFIG_SCRIPT
 		menu_save
