@@ -15,20 +15,20 @@ declare -A BUILD_CONFIG_ENV=(
 
 # config script's target elements
 declare -A BUILD_CONFIG_TARGET=(
-	["BUILD_MANUAL"]=" "	# manual build
-	["MAKE_ARCH"]=" "	# architecture ex> arm, arm64
-	["MAKE_PATH"]=" "	# Makefile source path to make build
-	["MAKE_CONFIG"]=""	# default config (defconfig) for make build
-	["MAKE_TARGET"]=""	# make build target names for make build
-	["MAKE_OPTION"]=""	# make option
-	["MAKE_NOT_CLEAN"]=""	# do not make clean "yes"
-	["MAKE_JOBS"]=" "	# build jobs number (-j n)
-	["CROSS_TOOL"]=" "	# crosstool compiler path to make for this target
-	["RESULT_FILE"]=""	# name of make built imag to copy to resultdir, copy after post command
-	["RESULT_NAME"]=""	# copy name to RESULT_DIR
-	["SCRIPT_PREV"]=" "	# previous script before make build.
-	["SCRIPT_POST"]=""	# post script after make build before copy 'RESULT_FILE' done.
-	["SCRIPT_LATE"]=""	# late script after copy 'RESULT_FILE' done.
+	["BUILD_MANUAL"]=" "	# manual build, It true, does not support automatic build and must be built manually.
+	["CROSS_TOOL"]=" "	# make build crosstool compiler path (set CROSS_COMPILE=)
+	["MAKE_ARCH"]=" "	# make build architecture (set ARCH=) ex> arm, arm64
+	["MAKE_PATH"]=" "	# make build source path
+	["MAKE_CONFIG"]=""	# make build default config(defconfig)
+	["MAKE_TARGET"]=""	# make build targets, to support multiple targets, the separator is';'
+	["MAKE_NOT_CLEAN"]=""	# if true do not support make clean commands
+	["MAKE_OPTION"]=""	# make build option
+	["RESULT_FILE"]=""	# make built images to copy resultdir, to support multiple targets, the separator is';'
+	["RESULT_NAME"]=""	# copy names to RESULT_DIR, to support multiple targets, the separator is';'
+	["MAKE_JOBS"]=" "	# make build jobs number (-j n)
+	["SCRIPT_PREV"]=" "	# previous build script before make build.
+	["SCRIPT_POST"]=""	# post build script after make build before copy 'RESULT_FILE' done.
+	["SCRIPT_LATE"]=""	# late build script after copy 'RESULT_FILE' done.
 	["SCRIPT_CLEAN"]=" "	# clean script for clean command.
 )
 
@@ -40,8 +40,9 @@ declare -A BUILD_STAGE=(
 	["late"]=true		# execute script 'SCRIPT_LATE'
 )
 
-BUILD_CONFIG_DIR="$(dirname "$(realpath "$0")")/configs"
-BUILD_CONFIG_STAT="$BUILD_CONFIG_DIR/.build_config"
+BUILD_BSP_PATH="$(dirname "$(realpath "$0")")"
+BUILD_CONFIG_STATUS="$BUILD_BSP_PATH/.build_config"
+BUILD_CONFIG_SCRIPT_PATH="$BUILD_BSP_PATH/configs"
 BUILD_CONFIG_PREFIX="build."
 BUILD_LOG_DIR="log"	# save to result directory
 
@@ -51,21 +52,21 @@ function print_format() {
 	echo -e "\t\t\" CROSS_TOOL	= <cross compiler(CROSS_COMPILE) path for the make build> \","
 	echo -e "\t\t\" RESULT_DIR	= <result directory to copy build images> \","
 	echo -e "\t\t\" <TARGET>	="
-	echo -e "\t\t\t BUILD_MANUAL   : <manual build>,"
-	echo -e "\t\t\t MAKE_ARCH      : <architecture(ARCH) for the make build arm, arm64>,"
-	echo -e "\t\t\t MAKE_PATH      : <source path to the make build>,"
-	echo -e "\t\t\t MAKE_CONFIG    : <defconfig for the make build>,"
-	echo -e "\t\t\t MAKE_TARGET    : <targets for the make build, separator is ';'>,"
-	echo -e "\t\t\t MAKE_NOT_CLEAN : <do not make clean "yes">"
-	echo -e "\t\t\t MAKE_OPTION    : <make option>,"
-	echo -e "\t\t\t MAKE_JOBS      : <make build jobs number (-j n)>,"
-	echo -e "\t\t\t CROSS_TOOL     : <cross compiler(CROSS_COMPILE) path for the make build>,"
-	echo -e "\t\t\t RESULT_FILE    : <names of build imag to copy to 'RESULT_DIR', separator is ';'>,"
-	echo -e "\t\t\t RESULT_NAME    : <copy names to 'RESULT_DIR', separator is ';'>,"
-	echo -e "\t\t\t SCRIPT_PREV     : <previous script before make build>,"
-	echo -e "\t\t\t SCRIPT_POST    : <post script after make build before copy 'RESULT_FILE' done>,"
-	echo -e "\t\t\t SCRIPT_LATE    : <late script after copy 'RESULT_FILE' done>,"
-	echo -e "\t\t\t SCRIPT_CLEAN   : <clean script for clean command> \","
+	echo -e "\t\t\t BUILD_MANUAL    : < manual build, It true, does not support automatic build and must be built manually. > ,"
+	echo -e "\t\t\t CROSS_TOOL      : < make build crosstool compiler path (set CROSS_COMPILE=) > ,"
+	echo -e "\t\t\t MAKE_ARCH       : < make build architecture (set ARCH=) ex> arm, arm64 > ,"
+	echo -e "\t\t\t MAKE_PATH       : < make build source path > ,"
+	echo -e "\t\t\t MAKE_CONFIG     : < make build default config(defconfig) > ,"
+	echo -e "\t\t\t MAKE_TARGET     : < make build targets, to support multiple targets, the separator is';' > ,"
+	echo -e "\t\t\t MAKE_NOT_CLEAN  : < if true do not support make clean commands > ,"
+	echo -e "\t\t\t MAKE_OPTION     : < make build option > ,"
+	echo -e "\t\t\t RESULT_FILE     : < make built images to copy resultdir, to support multiple file, the separator is';' > ,"
+	echo -e "\t\t\t RESULT_NAME     : < copy names to RESULT_DIR, to support multiple name, the separator is';' > ,"
+	echo -e "\t\t\t MAKE_JOBS       : < make build jobs number (-j n) > ,"
+	echo -e "\t\t\t SCRIPT_PREV     : < previous build script before make build. > ,"
+	echo -e "\t\t\t SCRIPT_POST     : < post build script after make build before copy 'RESULT_FILE' done. > ,"
+	echo -e "\t\t\t SCRIPT_LATE     : < late build script after copy 'RESULT_FILE' done. > ,"
+	echo -e "\t\t\t SCRIPT_CLEAN    : < clean script for clean command. > \","
 }
 
 function usage() {
@@ -76,27 +77,27 @@ function usage() {
 	print_format
 	echo ""
 	echo " options:"
-	echo -e  "\t-t\t select build targets, 'TARGET' ..."
-	echo -e  "\t-c\t build command"
+	echo -e  "\t-t\t select build targets, '<TARGET>' ..."
+	echo -e  "\t-c\t run command"
 	echo -e  "\t\t support 'cleanbuild','rebuild' and commands supported by target"
-	echo -e  "\t-r\t build clean all targets, run make clean/distclean and 'SCRIPT_CLEAN'"
-	echo -e  "\t-i\t show build target info"
-	echo -e  "\t-l\t listup build targets"
+	echo -e  "\t-C\t clean all targets, this option run make clean/distclean and 'SCRIPT_CLEAN'"
+	echo -e  "\t-i\t show target configs info"
+	echo -e  "\t-l\t listup targets"
 	echo -e  "\t-j\t set build jobs"
 	echo -e  "\t-o\t set build options"
-	echo -e  "\t-e\t edit build config.sh file"
+	echo -e  "\t-e\t edit build config file"
 	echo -e  "\t-v\t show build log"
-	echo -e  "\t-D\t show build log and enable external shell tasks tracing (with 'set -x')"
+	echo -e  "\t-V\t show build log and enable external shell tasks tracing (with 'set -x')"
 	echo -ne "\t-s\t build stage :"
 	for i in "${!BUILD_STAGE[@]}"; do
 		echo -n " '$i'";
 	done
 	echo -e  "\n\t\t stage order : prev > make > post > copy > late"
-	echo -e  "\t-m\t build only manual target 'BUILD_MANUAL'"
+	echo -e  "\t-m\t only build manual target 'BUILD_MANUAL'"
 	echo ""
 	echo " menuconfig:"
-	echo -e  "\t get defconfig script whit prefix '$BUILD_CONFIG_PREFIX', default in configs directory"
-	echo -e  "\t-d\t set config scripts directory for menuconfig"
+	echo -e  "\t Select the script with the prefix '$BUILD_CONFIG_PREFIX' in the configs directory."
+	echo -e  "\t-D\t set search scripts directory for the menuconfig"
 	echo ""
 }
 
@@ -161,7 +162,7 @@ function kill_progress () {
 trap kill_progress EXIT
 
 function print_env () {
-	echo -e "\n\033[1;32m BUILD STAT         = $BUILD_CONFIG_STAT\033[0m";
+	echo -e "\n\033[1;32m BUILD STATUS        = $BUILD_CONFIG_STATUS\033[0m";
 	echo -e "\033[1;32m BUILD CONFIG       = $BUILD_CONFIG_SCRIPT\033[0m";
 	echo ""
 	for key in "${!BUILD_CONFIG_ENV[@]}"; do
@@ -450,7 +451,7 @@ function exec_make () {
 	return $ret
 }
 
-function do_script_prev () {
+function script_prev () {
 	local target=$1
 
 	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_PREV"]} ]] ||
@@ -464,7 +465,7 @@ function do_script_prev () {
 	fi
 }
 
-function do_make_target () {
+function make_target () {
 	local target=$1
 	local command=$BUILD_COMMAND
 	local path=${BUILD_CONFIG_TARGET["MAKE_PATH"]}
@@ -545,24 +546,24 @@ function do_make_target () {
 
 	# make clean
 	if [[ ${mode["clean"]} == true ]]; then
-		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != "yes" ]]; then
+		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != true ]]; then
 			exec_make "-C $path clean" "$target"
 		fi
 		if [[ $command == clean ]]; then
-			do_script_clean "$target"
+			script_clean "$target"
 			exit 0;
 		fi
 	fi
 
 	# make distclean
 	if [[ ${mode["distclean"]} == true ]]; then
-		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != "yes" ]]; then
+		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != true ]]; then
 			exec_make "-C $path distclean" "$target"
 		fi
 		[[ $command == distclean ]] || [[ $BUILD_CLEANALL == true ]] && rm -f "$verfile";
 		[[ $BUILD_CLEANALL == true ]] && return;
 		if [[ $command == distclean ]]; then
-			do_script_clean "$target"
+			script_clean "$target"
 			exit 0;
 		fi
 	fi
@@ -597,7 +598,7 @@ function do_make_target () {
 	fi
 }
 
-function do_script_post () {
+function script_post () {
 	local target=$1
 
 	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_POST"]} ]] ||
@@ -611,7 +612,7 @@ function do_script_post () {
 	fi
 }
 
-function do_make_result () {
+function make_result () {
 	local path=${BUILD_CONFIG_TARGET["MAKE_PATH"]}
 	local file=${BUILD_CONFIG_TARGET["RESULT_FILE"]}
 	local dir=${BUILD_CONFIG_ENV["RESULT_DIR"]}
@@ -642,7 +643,7 @@ function do_make_result () {
 	done
 }
 
-function do_script_late () {
+function script_late () {
 	local target=$1
 
 	if [[ -z ${BUILD_CONFIG_TARGET["SCRIPT_LATE"]} ]] ||
@@ -656,7 +657,7 @@ function do_script_late () {
 	fi
 }
 
-function do_script_clean () {
+function script_clean () {
 	local target=$1 command=$BUILD_COMMAND
 
 	[[ -z ${BUILD_CONFIG_TARGET["SCRIPT_CLEAN"]} ]] && return;
@@ -676,12 +677,12 @@ function build_target () {
 	if ! mkdir -p "${BUILD_CONFIG_ENV["RESULT_DIR"]}"; then exit 1; fi
 	if ! mkdir -p "$BUILD_LOG_DIR"; then exit 1; fi
 
-	do_script_prev "$target"
-	do_make_target "$target"
-	do_script_post "$target"
-	do_make_result "$target"
-	do_script_late "$target"
-	do_script_clean "$target"
+	script_prev "$target"
+	make_target "$target"
+	script_post "$target"
+	make_result "$target"
+	script_late "$target"
+	script_clean "$target"
 }
 
 function build_run () {
@@ -698,30 +699,11 @@ function build_run () {
 	show_build_time
 }
 
-function set_build_stage () {
-	for i in "${!BUILD_STAGE[@]}"; do
-		if [[ $i == "$1" ]]; then
-			for n in "${!BUILD_STAGE[@]}"; do
-				BUILD_STAGE[$n]=false
-			done
-			BUILD_STAGE[$i]=true
-			return
-		fi
-	done
-
-	echo -ne "\n\033[1;31m Not Support Stage Command: $i ( \033[0m"
-	for i in "${!BUILD_STAGE[@]}"; do
-		echo -n "$i "
-	done
-	echo -e "\033[1;31m)\033[0m\n"
-	exit 1;
-}
-
-function setup_config_script () {
+function setup_script () {
 	local config=$1
 
 	if [[ ! -f $config ]]; then
-		err " Not found config scripts in $config"
+		err " Not selected config scripts in $config"
 		usage;
 		exit 1;
 	fi
@@ -737,14 +719,56 @@ function setup_config_script () {
 	BUILD_CONFIG_IMAGE=("${BUILD_IMAGES[@]}");
 }
 
-function listup_avail_config () {
+function store_script_dir () {
+	local dir=$1
+
+	if [[ ! -d $(realpath "$dir") ]]; then
+		err " No such directory: $dir"
+		exit 1;
+	fi
+
+cat > "$BUILD_CONFIG_STATUS" <<EOF
+PATH   = $(realpath "$dir")
+CONFIG =
+EOF
+}
+
+function store_script_sel () {
+	sed -i "s/^CONFIG.*/CONFIG = $1/" "$BUILD_CONFIG_STATUS"
+}
+
+function parse_script_dir () {
+	local file=$BUILD_CONFIG_STATUS
+	local str ret
+
+	[[ ! -f $file ]] && return;
+
+	str=$(sed -n '/^\<PATH\>/p' "$file");
+	ret=$(echo "$str" | cut -d'=' -f 2)
+	ret=$(echo "$ret" | sed 's/[[:space:]]//g')
+	BUILD_CONFIG_SCRIPT_PATH="${ret# *}"
+}
+
+function parse_script_sel () {
+	local file=$BUILD_CONFIG_STATUS
+	local str ret
+
+	[[ ! -f $file ]] && return;
+
+	str=$(sed -n '/^\<CONFIG\>/p' "$file");
+	ret=$ret/$(echo "$str" | cut -d'=' -f 2)
+	ret=$(echo "$ret" | sed 's/[[:space:]]//g')
+	BUILD_CONFIG_SCRIPT=$(realpath "$BUILD_CONFIG_SCRIPT_PATH/"${ret# *}"")
+}
+
+function get_avail_configs () {
 	local table=$1	# parse table
-	local dir=$BUILD_CONFIG_DIR
 	local deli=$BUILD_CONFIG_PREFIX
 	local val value
 
-	if ! cd "$dir"; then
-		err " Not found $dir"
+	parse_script_dir
+	if ! cd "$BUILD_CONFIG_SCRIPT_PATH"; then
+		err " Not found $BUILD_CONFIG_SCRIPT_PATH"
 		exit 1;
 	fi
 
@@ -759,33 +783,6 @@ function listup_avail_config () {
 		val="${val} $(echo "$i" | awk -F".${deli}" '{print $1}')"
 		eval "$table=(\"${val}\")"
 	done
-}
-
-function parse_config_script () {
-	local file=$BUILD_CONFIG_STAT
-	local str
-
-	[[ ! -f $file ]] && return;
-
-	str=$(sed -n '/^\<PATH\>/p' "$file");
-	ret=$(echo "$str" | cut -d'=' -f 2)
-	str=$(sed -n '/^\<CONFIG\>/p' "$file");
-	ret=$ret/$(echo "$str" | cut -d'=' -f 2)
-	ret=$(echo "$ret" | sed 's/[[:space:]]//g')
-	BUILD_CONFIG_SCRIPT="${ret# *}"
-}
-
-function store_config_script () {
-	local file=$BUILD_CONFIG_STAT
-	local config=$BUILD_CONFIG_SCRIPT
-
-	[[ $SHOW_INFO == true ]] && return;
-	[[ ! -d $(realpath "$(dirname "$file")") ]] && return
-
-cat > "$file" <<EOF
-PATH   = $(realpath "$(dirname "$config")")
-CONFIG = $(basename "$config")
-EOF
 }
 
 function menu_config () {
@@ -819,11 +816,30 @@ function menu_save () {
 	if ! (whiptail --title "Save/Exit" --yesno "Save" 8 78); then
 		exit 1;
 	fi
-	store_config_script
+	store_script_sel "$BUILD_CONFIG_SCRIPT"
+}
+
+function set_build_stage () {
+	for i in "${!BUILD_STAGE[@]}"; do
+		if [[ $i == "$1" ]]; then
+			for n in "${!BUILD_STAGE[@]}"; do
+				BUILD_STAGE[$n]=false
+			done
+			BUILD_STAGE[$i]=true
+			return
+		fi
+	done
+
+	echo -ne "\n\033[1;31m Not Support Stage Command: $i ( \033[0m"
+	for i in "${!BUILD_STAGE[@]}"; do
+		echo -n "$i "
+	done
+	echo -e "\033[1;31m)\033[0m\n"
+	exit 1;
 }
 
 function parse_args () {
-	while getopts "f:t:c:rj:o:s:d:milevDh" opt; do
+	while getopts "f:t:c:Cj:o:s:D:milevVh" opt; do
 	case $opt in
 		f )	BUILD_CONFIG_SCRIPT=$(realpath "$OPTARG");;
 		t )	BUILD_SELECT_TARGET=("$OPTARG")
@@ -835,13 +851,14 @@ function parse_args () {
 			;;
 		c )	BUILD_COMMAND="$OPTARG";;
 		m )	BUILD_MANUAL_TARGET=true;;
-		r )	BUILD_CLEANALL=true; BUILD_COMMAND="distclean";;
+		C )	BUILD_CLEANALL=true; BUILD_COMMAND="distclean";;
 		j )	BUILD_JOBS=$OPTARG;;
 		v )	DBG_VERBOSE=true;;
-		D )	DBG_VERBOSE=true; DBG_TRACE=true;;
+		V )	DBG_VERBOSE=true; DBG_TRACE=true;;
 		o )	BUILD_OPTION="$OPTARG";;
-		d )	BUILD_CONFIG_DIR=$(realpath "$OPTARG")
-			BUILD_CONFIG_STAT=$(realpath "$BUILD_CONFIG_DIR/.build_config");;
+		D )	BUILD_CONFIG_SCRIPT_PATH=$(realpath "$OPTARG")
+			store_script_dir "$BUILD_CONFIG_SCRIPT_PATH"
+			exit 0;;
 		i ) 	SHOW_INFO=true;;
 		l )	SHOW_LIST=true;;
 		e )	EDIT=true;
@@ -864,23 +881,23 @@ else
 fi
 
 if [[ -z $BUILD_CONFIG_SCRIPT ]]; then
-	build_config_list=
-	listup_avail_config build_config_list
-	parse_config_script
+	avail_list=
+	get_avail_configs avail_list
+	parse_script_sel
 	if [[ $* == *"menuconfig"* && $BUILD_COMMAND != "menuconfig" ]]; then
-		menu_config "$build_config_list" "config" BUILD_CONFIG_SCRIPT
+		menu_config "$avail_list" "config" BUILD_CONFIG_SCRIPT
 		menu_save
-		msg "$(sed -e 's/^/ /' < "$BUILD_CONFIG_STAT")"
+		msg "$(sed -e 's/^/ /' < "$BUILD_CONFIG_STATUS")"
 		exit 0;
 	fi
 	if [[ -z $BUILD_CONFIG_SCRIPT ]]; then
-		err " No selected config script in $BUILD_CONFIG_DIR"
+		err " Not selected config script in $BUILD_CONFIG_SCRIPT_PATH"
 		err " Set config script with -f <script> or menuconfig option"
 		exit 1;
 	fi
 fi
 
-setup_config_script "$BUILD_CONFIG_SCRIPT"
+setup_script "$BUILD_CONFIG_SCRIPT"
 
 if [[ "${EDIT}" == true ]]; then
 	$EDIT_TOOL "$BUILD_CONFIG_SCRIPT"
@@ -889,5 +906,4 @@ fi
 
 parse_env
 setup_env "${BUILD_CONFIG_ENV["CROSS_TOOL"]}"
-
 build_run
