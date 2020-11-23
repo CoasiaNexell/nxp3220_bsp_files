@@ -93,7 +93,8 @@ function usage() {
 		echo -n " '$i'";
 	done
 	echo -e  "\n\t\t stage order : prev > make > post > copy > late"
-	echo -e  "\t-m\t only build manual target 'BUILD_MANUAL'"
+	echo -e  "\t-m\t build manual targets 'BUILD_MANUAL'"
+	echo -e  "\t-A\t Full build including manual build"
 	echo ""
 	echo " menuconfig:"
 	echo -e  "\t Select the script with the prefix '$BUILD_CONFIG_PREFIX' in the configs directory."
@@ -107,13 +108,13 @@ function msg () { echo -e "\033[0;33m$*\033[0m"; }
 BUILD_CONFIG_SCRIPT=""		# build config script file
 BUILD_CONFIG_IMAGE=()		# store $BUILD_IMAGES
 
-BUILD_SELECT_TARGET=()
+BUILD_RUN_TARGET=()
 BUILD_COMMAND=""
 BUILD_CLEANALL=false
 BUILD_OPTION=""
 BUILD_JOBS="$(grep -c processor /proc/cpuinfo)"
-BUILD_MANUAL=false
-BUILD_MANUAL_TARGET=false
+BUILD_TARGET_MANULA=false
+BUILD_TARGET_ALL=false
 
 SHOW_INFO=false
 SHOW_LIST=false
@@ -162,7 +163,7 @@ function kill_progress () {
 trap kill_progress EXIT
 
 function print_env () {
-	echo -e "\n\033[1;32m BUILD STATUS        = $BUILD_CONFIG_STATUS\033[0m";
+	echo -e "\n\033[1;32m BUILD STATUS       = $BUILD_CONFIG_STATUS\033[0m";
 	echo -e "\033[1;32m BUILD CONFIG       = $BUILD_CONFIG_SCRIPT\033[0m";
 	echo ""
 	for key in "${!BUILD_CONFIG_ENV[@]}"; do
@@ -279,6 +280,7 @@ function parse_target () {
 
 function parse_target_list () {
 	local target_list=()
+	local manuals targets
 
 	for str in "${BUILD_CONFIG_IMAGE[@]}"; do
 		local val add=true
@@ -298,7 +300,7 @@ function parse_target_list () {
 		[[ $str == *"="* ]] && target_list+=("$val");
 	done
 
-	for i in "${BUILD_SELECT_TARGET[@]}"; do
+	for i in "${BUILD_RUN_TARGET[@]}"; do
 		local found=false;
 		for n in "${target_list[@]}"; do
 			if [[ $i == "$n" ]]; then
@@ -317,30 +319,25 @@ function parse_target_list () {
 		fi
 	done
 
-	if [[ ${#BUILD_SELECT_TARGET[@]} -eq 0 ]]; then
-		if [[ $BUILD_CLEANALL != true ]] &&
-		   [[ -n $BUILD_COMMAND ]] &&
-                   [[ $BUILD_COMMAND != cleanbuild ]] && [[ $BUILD_COMMAND != rebuild ]]; then
-			echo -e "\n Not support command '$BUILD_COMMAND'"
-			echo -e " If the target is not selected, commands : cleanbuild, rebuild\n"
-			exit 1;
+	for t in "${target_list[@]}"; do
+		parse_target "$t"
+		if [[ ${BUILD_CONFIG_TARGET["BUILD_MANUAL"]} == true ]]; then
+			manuals+="$t "
+		else
+			targets+="$t "
 		fi
-		BUILD_SELECT_TARGET=("${target_list[@]}");
+	done
+
+	if [[ ${#BUILD_RUN_TARGET[@]} -eq 0 ]]; then
+		BUILD_RUN_TARGET=($targets)
+		[[ $BUILD_TARGET_MANULA == true ]] && BUILD_RUN_TARGET=($manuals);
+		[[ $BUILD_TARGET_ALL == true ]] && BUILD_RUN_TARGET=($manuals $targets);
 	fi
 
 	if [[ $SHOW_LIST == true ]]; then
 		echo -e "\033[1;32m BUILD CONFIG  = $BUILD_CONFIG_SCRIPT\033[0m";
-		for t in "${target_list[@]}"; do
-			parse_target "$t"
-			if [[ ${BUILD_CONFIG_TARGET["BUILD_MANUAL"]} == true ]]; then
-				manuals+="$t "
-			else
-				targets+="$t "
-			fi
-		done
-
-		echo -e "\033[0;33m BUILD TARGETS = $targets\033[0m";
-		[[ $manuals ]] && echo -e "\033[0;33m BUILD MANUALS = $manuals\033[0m";
+		echo -e "\033[0;33m TARGETS  = $targets\033[0m";
+		[[ $manuals ]] && echo -e "\033[0;33m MANUALLY = $manuals\033[0m";
 		echo ""
 		exit 0;
 	fi
@@ -352,17 +349,6 @@ function check_target () {
 	if [[ $SHOW_INFO == true ]]; then
 		print_target "$target"
 		return 1;
-	fi
-
-	if [[ $BUILD_MANUAL == false ]]; then
-		if [[ $BUILD_MANUAL_TARGET == false ]] && \
-		   [[ ${BUILD_CONFIG_TARGET["BUILD_MANUAL"]} == true ]]; then
-			return 1;
-		fi
-		if [[ $BUILD_MANUAL_TARGET == true ]] && \
-		   [[ ${BUILD_CONFIG_TARGET["BUILD_MANUAL"]} == false ]]; then
-			return 1;
-		fi
 	fi
 
 	print_target "$target"
@@ -689,7 +675,7 @@ function build_run () {
 	parse_target_list
 	print_env
 
-	for i in "${BUILD_SELECT_TARGET[@]}"; do
+	for i in "${BUILD_RUN_TARGET[@]}"; do
 		build_target "$i"
 	done
 
@@ -837,18 +823,18 @@ function set_build_stage () {
 }
 
 function parse_args () {
-	while getopts "f:t:c:Cj:o:s:D:milevVh" opt; do
+	while getopts "f:t:c:Cj:o:s:D:mAilevVh" opt; do
 	case $opt in
 		f )	BUILD_CONFIG_SCRIPT=$(realpath "$OPTARG");;
-		t )	BUILD_SELECT_TARGET=("$OPTARG")
+		t )	BUILD_RUN_TARGET=("$OPTARG")
 			until [[ $(eval "echo \${$OPTIND}") =~ ^-.* ]] || [[ -z "$(eval "echo \${$OPTIND}")" ]]; do
-				BUILD_SELECT_TARGET+=("$(eval "echo \${$OPTIND}")")
+				BUILD_RUN_TARGET+=("$(eval "echo \${$OPTIND}")")
 				OPTIND=$((OPTIND + 1))
 			done
-			BUILD_MANUAL=true
 			;;
 		c )	BUILD_COMMAND="$OPTARG";;
-		m )	BUILD_MANUAL_TARGET=true;;
+		m )	BUILD_TARGET_MANULA=true;;
+		A )	BUILD_TARGET_ALL=true;;
 		C )	BUILD_CLEANALL=true; BUILD_COMMAND="distclean";;
 		j )	BUILD_JOBS=$OPTARG;;
 		v )	DBG_VERBOSE=true;;
