@@ -616,8 +616,7 @@ function make_result () {
 		src=$(realpath "$path/$src")
 		src=$(echo "$src" | sed 's/[;,]//g')
 		dst=$(realpath "$dir/$(echo "$ret" | cut -d' ' -f1)")
-		ret=$(echo $ret | cut -d' ' -f2)
-		ret=$(echo "$ret" | sed 's/[;,]//g')
+		ret=$(echo $ret | cut -d' ' -f2-)
 		if [[ $src != *'*'* ]] && [[ -d $src ]] && [[ -d $dst ]]; then
 			rm -rf "$dst";
 		fi
