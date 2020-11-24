@@ -747,7 +747,8 @@ function parse_config () {
 
 function avail_configs () {
 	local table=$1	# parse table
-	local deli=$BUILD_CONFIG_PREFIX
+	local prefix=$BUILD_CONFIG_PREFIX
+	local extension="sh"
 	local val value
 
 	if ! cd "$BUILD_CONFIG_SCRIPT_DIR"; then
@@ -757,13 +758,14 @@ function avail_configs () {
 
 	value=$(find ./ -print \
 		2> >(grep -v 'No such file or directory' >&2) | \
-		grep -F "./${deli}" | sort)
+		grep -F "./${prefix}" | sort)
 
 	for i in $value; do
 		i="$(echo "$i" | cut -d'/' -f2)"
-		[[ -n $(echo "$i" | awk -F".${deli}" '{print $2}') ]] && continue;
+		[[ -n $(echo "$i" | awk -F".${prefix}" '{print $2}') ]] && continue;
 		[[ $i == *common* ]] && continue;
-		val="${val} $(echo "$i" | awk -F".${deli}" '{print $1}')"
+		[[ "${i##*.}" != $extension ]] && continue;
+		val="${val} $(echo "$i" | awk -F".${prefix}" '{print $1}')"
 		eval "$table=(\"${val}\")"
 	done
 }
