@@ -343,18 +343,6 @@ function parse_target_list () {
 	fi
 }
 
-function check_target () {
-	local target=$1
-
-	if [[ $SHOW_INFO == true ]]; then
-		print_target "$target"
-		return 1;
-	fi
-
-	print_target "$target"
-	return 0
-}
-
 function exec_shell () {
 	local command=$1 target=$2
 	local log="$BUILD_LOG_DIR/$target.script.log"
@@ -657,8 +645,8 @@ function build_target () {
 	local target=$1
 
 	parse_target "$target"
-
-	if ! check_target "$target"; then return; fi
+	print_target "$target"
+	[[ $SHOW_INFO == true ]] && return;
 	if ! mkdir -p "${BUILD_CONFIG_ENV["RESULT_DIR"]}"; then exit 1; fi
 	if ! mkdir -p "$BUILD_LOG_DIR"; then exit 1; fi
 
