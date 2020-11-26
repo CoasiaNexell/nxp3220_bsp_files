@@ -15,6 +15,7 @@ declare -A BUILD_CONFIG_ENV=(
 
 # config script's target elements
 declare -A BUILD_CONFIG_TARGET=(
+	["BUILD_DEPEND"]=" "	# target dependency, to support multiple targets, the separator is' '.
 	["BUILD_MANUAL"]=" "	# manual build, It true, does not support automatic build and must be built manually.
 	["CROSS_TOOL"]=" "	# make build crosstool compiler path (set CROSS_COMPILE=)
 	["MAKE_ARCH"]=" "	# make build architecture (set ARCH=) ex> arm, arm64
@@ -40,18 +41,20 @@ declare -A BUILD_STAGE=(
 	["late"]=true		# execute script 'SCRIPT_LATE'
 )
 
-BUILD_BSP_PATH="$(dirname "$(realpath "$0")")"
-BUILD_CONFIG_STATUS="$BUILD_BSP_PATH/.build_config"
-BUILD_CONFIG_SCRIPT_DIR="$BUILD_BSP_PATH/configs"
-BUILD_CONFIG_PREFIX="build."
+BUILD_PROGRAM_PATH="$(dirname "$(realpath "$0")")"
+BUILD_CONFIG_SCRIPT_DIR="$BUILD_PROGRAM_PATH/configs"
+BUILD_CONFIG_SCRIPT_PREFIX="build."
+BUILD_CONFIG_SCRIPT_EXTENTION="sh"
 BUILD_LOG_DIR="log"	# save to result directory
+BUILD_CONFIG_SCRIPT_STATUS_FILE="$BUILD_PROGRAM_PATH/.build_script_config"
 
-function print_format() {
+function print_format () {
 	echo -e " config.sh: format"
 	echo -e "\t BUILD_IMAGES=("
 	echo -e "\t\t\" CROSS_TOOL	= <cross compiler(CROSS_COMPILE) path for the make build> \","
 	echo -e "\t\t\" RESULT_DIR	= <result directory to copy build images> \","
 	echo -e "\t\t\" <TARGET>	="
+	echo -e "\t\t\t BUILD_DEPEND    : < target dependency, to support multiple targets, the separator is' '. >, "
 	echo -e "\t\t\t BUILD_MANUAL    : < manual build, It true, does not support automatic build and must be built manually. > ,"
 	echo -e "\t\t\t CROSS_TOOL      : < make build crosstool compiler path (set CROSS_COMPILE=) > ,"
 	echo -e "\t\t\t MAKE_ARCH       : < make build architecture (set ARCH=) ex> arm, arm64 > ,"
@@ -69,11 +72,11 @@ function print_format() {
 	echo -e "\t\t\t SCRIPT_CLEAN    : < clean script for clean command. > \","
 }
 
-function usage() {
+function usage () {
 	echo ""
 	echo " Usage:"
-	echo -e "\t$(basename "$0") -f config.sh [options]"
-	echo -e "\t$(basename "$0") menuconfig [-d]\n"
+	echo -e "\t$(basename "$0") -f script.sh [options]"
+	echo -e "\t$(basename "$0") menuconfig [-D]\n"
 	print_format
 	echo ""
 	echo " options:"
@@ -88,6 +91,7 @@ function usage() {
 	echo -e  "\t-e\t edit build config file"
 	echo -e  "\t-v\t show build log"
 	echo -e  "\t-V\t show build log and enable external shell tasks tracing (with 'set -x')"
+	echo -e  "\t-p\t skip dependency"
 	echo -ne "\t-s\t build stage :"
 	for i in "${!BUILD_STAGE[@]}"; do
 		echo -n " '$i'";
@@ -97,8 +101,28 @@ function usage() {
 	echo -e  "\t-A\t Full build including manual build"
 	echo ""
 	echo " menuconfig:"
-	echo -e  "\t Select the script with the prefix '$BUILD_CONFIG_PREFIX' in the configs directory."
-	echo -e  "\t-D\t set search scripts directory for the menuconfig"
+	echo -e  "\t Select the script with the prefix '$BUILD_CONFIG_SCRIPT_PREFIX' and extention '.$BUILD_CONFIG_SCRIPT_EXTENTION' in the configs directory."
+	echo -e  "\t-D\t set scripts directory for the menuconfig"
+	echo ""
+	echo "case 1. build with '-f'"
+	echo -e  "\tBuild all targets"
+	echo -e  "\t\t$> $0 -f configs/build.xxx.sh"
+	echo -e  "\tBuild select target"
+	echo -e  "\t\t$> $0 -f configs/build.xxx.sh -t <target ...>"
+	echo -e  "\tBuild select target with command"
+	echo -e  "\t\t$> $0 -f configs/build.xxx.sh -t <target ...> -c <command>"
+	echo ""
+	echo "case 2. build with menuconfig"
+	echo -e  "\tSet scripts directory"
+	echo -e  "\t\t$> $0 -D <dir>"
+	echo -e  "\tSelect script"
+	echo -e  "\t\t$> $0 menuconfig"
+	echo -e  "\tBuild all targets"
+	echo -e  "\t\t$> $0"
+	echo -e  "\tBuild select target"
+	echo -e  "\t\t$> $0 -t <target ...>"
+	echo -e  "\tBuild select target with command"
+	echo -e  "\t\t$> $0 -t <target ...> -c <command>"
 	echo ""
 }
 
@@ -111,16 +135,18 @@ BUILD_CONFIG_IMAGE=()		# store $BUILD_IMAGES
 BUILD_RUN_TARGET=()
 BUILD_COMMAND=""
 BUILD_CLEANALL=false
-BUILD_OPTION=""
+BUILD_APPEND_OPTION=""
 BUILD_JOBS="$(grep -c processor /proc/cpuinfo)"
-BUILD_TARGET_MANULA=false
-BUILD_TARGET_ALL=false
 
 SHOW_INFO=false
 SHOW_LIST=false
-EDIT=false
+EDIT_SCRIPT=false
 DBG_VERBOSE=false
 DBG_TRACE=false
+
+BUILD_MANUAL_TARGETS=false
+BUILD_ALL_TAGETS=false	# include manual targets
+BUILD_CHECK_DEPEND=true
 
 function show_build_time () {
 	local hrs=$(( SECONDS/3600 ));
@@ -163,7 +189,7 @@ function kill_progress () {
 trap kill_progress EXIT
 
 function print_env () {
-	echo -e "\n\033[1;32m BUILD STATUS       = $BUILD_CONFIG_STATUS\033[0m";
+	echo -e "\n\033[1;32m BUILD STATUS       = $BUILD_CONFIG_SCRIPT_STATUS_FILE\033[0m";
 	echo -e "\033[1;32m BUILD CONFIG       = $BUILD_CONFIG_SCRIPT\033[0m";
 	echo ""
 	for key in "${!BUILD_CONFIG_ENV[@]}"; do
@@ -222,9 +248,13 @@ function print_target () {
 	done
 }
 
-function parse_target () {
+declare -A __build_target_depend=()
+__build_target_depend_list=()
+
+function parse_depend () {
 	local target=$1
-	local contents
+	local contents found=false
+	local key="BUILD_DEPEND"
 
 	# get target's contents
 	for i in "${BUILD_CONFIG_IMAGE[@]}"; do
@@ -238,9 +268,59 @@ function parse_target () {
 			# remove line-feed, first and last blank
 			contents="$(echo "$elem" | tr '\n' ' ')"
 			contents="$(echo "$contents" | sed 's/^[ \t]*//;s/[ \t]*$//')"
+			found=true
 			break
 		fi
 	done
+
+	if [[ $found == false ]]; then
+		err "\n Unknown target '$target'"
+		exit 1;
+	fi
+
+	# parse contents's elements
+	local val=""
+	__build_target_depend[$key]=$val
+	if ! echo "$contents" | grep -qwn "$key"; then return; fi
+
+	val="${contents#*$key}"
+	val="$(echo "$val" | cut -d":" -f 2-)"
+	val="$(echo "$val" | cut -d"," -f 1)"
+	# remove first,last space and set multiple space to single space
+	val="$(echo "$val" | sed 's/^[ \t]*//;s/[ \t]*$//')"
+	val="$(echo "$val" | sed 's/\s\s*/ /g')"
+
+	__build_target_depend[$key]="$val"
+}
+
+function parse_target () {
+	local target=$1
+	local contents found=false
+
+	# get target's contents
+	for i in "${BUILD_CONFIG_IMAGE[@]}"; do
+		if [[ $i == *"$target"* ]]; then
+			local elem
+			elem="$(echo $(echo "$i" | cut -d'=' -f 1) | cut -d' ' -f 1)"
+			[[ $target != "$elem" ]] && continue;
+
+			# cut
+			elem="${i#*$elem*=}"
+			# remove line-feed, first and last blank
+			contents="$(echo "$elem" | tr '\n' ' ')"
+			contents="$(echo "$contents" | sed 's/^[ \t]*//;s/[ \t]*$//')"
+			found=true
+			break
+		fi
+	done
+
+	if [[ $found == false ]]; then
+		err "\n Unknown target '$target'"
+		exit 1;
+	fi
+
+	# initialize
+	for key in "${!BUILD_CONFIG_TARGET[@]}"; do BUILD_CONFIG_TARGET[$key]=""; done
 
 	# parse contents's elements
 	for key in "${!BUILD_CONFIG_TARGET[@]}"; do
@@ -278,9 +358,32 @@ function parse_target () {
 	fi
 }
 
+function check_depend () {
+        local target=$1
+
+	parse_depend "$target"
+
+	if [[ -z ${__build_target_depend["BUILD_DEPEND"]} ]]; then
+		unset __build_target_depend_list[${#__build_target_depend_list[@]}-1]
+		return
+	fi
+
+        for d in ${__build_target_depend["BUILD_DEPEND"]}; do
+		if [[ " ${__build_target_depend_list[@]} " =~ "${d}" ]]; then
+			echo -e "\033[1;31m Error recursive, Check 'BUILD_DEPEND':\033[0m"
+			echo -e "\033[1;31m\t${__build_target_depend_list[@]} $d\033[0m"
+			exit 1;
+		fi
+		__build_target_depend_list+=("$d")
+		check_depend "$d"
+        done
+	unset __build_target_depend_list[${#__build_target_depend_list[@]}-1]
+}
+
 function parse_target_list () {
 	local target_list=()
-	local manuals targets
+	local list_manuals=() list_targets=()
+	local dump_manuals=() dump_targets=()
 
 	for str in "${BUILD_CONFIG_IMAGE[@]}"; do
 		local val add=true
@@ -309,7 +412,7 @@ function parse_target_list () {
 			fi
 		done
 		if [[ $found == false ]]; then
-			echo -e  "\n Not support target '$i'"
+			echo -e  "\n Unknown target '$i'"
 			echo -ne " Check targets :"
 			for t in "${target_list[@]}"; do
 				echo -n " $t"
@@ -321,23 +424,43 @@ function parse_target_list () {
 
 	for t in "${target_list[@]}"; do
 		parse_target "$t"
+		depend=${BUILD_CONFIG_TARGET["BUILD_DEPEND"]}
+		[[ -n $depend ]] && depend="depend: $depend";
 		if [[ ${BUILD_CONFIG_TARGET["BUILD_MANUAL"]} == true ]]; then
-			manuals+="$t "
+			list_manuals+=("$t")
+			dump_manuals+=("$(printf "%-18s %s\n" "$t" "${depend} ")")
 		else
-			targets+="$t "
+			list_targets+=("$t")
+			dump_targets+=("$(printf "%-18s %s\n" "$t" "${depend} ")")
 		fi
 	done
 
 	if [[ ${#BUILD_RUN_TARGET[@]} -eq 0 ]]; then
-		BUILD_RUN_TARGET=($targets)
-		[[ $BUILD_TARGET_MANULA == true ]] && BUILD_RUN_TARGET=($manuals);
-		[[ $BUILD_TARGET_ALL == true ]] && BUILD_RUN_TARGET=($manuals $targets);
+		BUILD_RUN_TARGET=("${list_targets[@]}")
+		[[ $BUILD_MANUAL_TARGETS == true ]] && BUILD_RUN_TARGET=("${list_manuals[@]}");
+		[[ $BUILD_ALL_TAGETS == true ]] && BUILD_RUN_TARGET=("${list_manuals[@]}" "${list_targets[@]}");
+	fi
+
+	# check dependency
+	if [[ $BUILD_CHECK_DEPEND == true ]]; then
+		for i in "${BUILD_RUN_TARGET[@]}"; do
+			__build_target_depend_list+=("$i")
+			check_depend "$i"
+		done
 	fi
 
 	if [[ $SHOW_LIST == true ]]; then
 		echo -e "\033[1;32m BUILD CONFIG  = $BUILD_CONFIG_SCRIPT\033[0m";
-		echo -e "\033[0;33m TARGETS  = $targets\033[0m";
-		[[ $manuals ]] && echo -e "\033[0;33m MANUALLY = $manuals\033[0m";
+		echo -e "\033[0;33m TARGETS\033[0m";
+		for i in "${dump_targets[@]}"; do
+			echo -e "\033[0;33m  $i\033[0m";
+		done
+		if [[ $list_manuals ]]; then
+			echo -e "\033[0;33m\n MANUALLY\033[0m";
+			for i in "${dump_manuals[@]}"; do
+				echo -e "\033[0;33m  $i\033[0m";
+			done
+		fi
 		echo ""
 		exit 0;
 	fi
@@ -444,47 +567,37 @@ function make_target () {
 	local command=$BUILD_COMMAND
 	local path=${BUILD_CONFIG_TARGET["MAKE_PATH"]}
 	local config=${BUILD_CONFIG_TARGET["MAKE_CONFIG"]}
-	local opt="${BUILD_CONFIG_TARGET["MAKE_OPTION"]} -j${BUILD_CONFIG_TARGET["MAKE_JOBS"]} "
-	local verfile="${path}/.${target}_defconfig"
-	local version="BUILD:${config}:${BUILD_CONFIG_TARGET["MAKE_OPTION"]}"
+	local build_option="${BUILD_CONFIG_TARGET["MAKE_OPTION"]} -j${BUILD_CONFIG_TARGET["MAKE_JOBS"]} "
+	local stage_file="${path}/.${target}_defconfig"
+	local stage="BUILD:${config}:${BUILD_CONFIG_TARGET["MAKE_OPTION"]}"
+	local arch_option
 	declare -A mode=(
 		["distclean"]=false
 		["clean"]=false
 		["defconfig"]=false
 		["menuconfig"]=false
 		)
-	local archopt
 
 	if [[ -z $path ]] || [[ ! -d $path ]]; then
 		[[ -z $path ]] && return;
 		err " Not found 'MAKE_PATH': '${BUILD_CONFIG_TARGET["MAKE_PATH"]}'"
 		exit 1;
 	fi
+
 	if [[ ${BUILD_STAGE["make"]} == false ]] ||
 	   [[ ! -f $path/makefile && ! -f $path/Makefile ]]; then
 		return
 	fi
 
 	if [[ ${BUILD_CONFIG_TARGET["MAKE_ARCH"]} ]]; then
-		archopt="ARCH=${BUILD_CONFIG_TARGET["MAKE_ARCH"]} "
+		arch_option="ARCH=${BUILD_CONFIG_TARGET["MAKE_ARCH"]} "
 	fi
 
 	if [[ ${BUILD_CONFIG_TARGET["CROSS_TOOL"]} ]]; then
-		archopt+="CROSS_COMPILE=${BUILD_CONFIG_TARGET["CROSS_TOOL"]} "
+		arch_option+="CROSS_COMPILE=${BUILD_CONFIG_TARGET["CROSS_TOOL"]} "
 	fi
 
-	[[ -n $BUILD_OPTION ]] && opt+="$BUILD_OPTION";
-
-	# return if MAKE_TARGET is dtb
-	if [[ $(echo ${BUILD_CONFIG_TARGET["MAKE_TARGET"]}  | cut -d " " -f1) == *".dtb"* ]]; then
-		if [[ $BUILD_CLEANALL == false ]]; then
-			archopt+="$(echo ${BUILD_CONFIG_TARGET["MAKE_TARGET"]} | sed 's/[;,]//g') "
-			if ! exec_make "-C $path $archopt $opt" "$target"; then
-				exit 1
-			fi
-		fi
-		return
-	fi
+	[[ -n $BUILD_APPEND_OPTION ]] && build_option+="$BUILD_APPEND_OPTION";
 
 	if [[ $command == clean ]] || [[ $command == cleanbuild ]] ||
 	   [[ $command == rebuild ]]; then
@@ -508,13 +621,12 @@ function make_target () {
 		mode["menuconfig"]=true
 	fi
 
-	if [[ ! -e $verfile ]] || [[ $(cat "$verfile") != "$version" ]]; then
+	if [[ ! -e $stage_file ]] || [[ $(cat "$stage_file") != "$stage" ]]; then
 		mode["clean"]=true;
 		mode["distclean"]=true
 		[[ -n $config ]] && mode["defconfig"]=true;
-
-		rm -f "$verfile";
-		echo "$version" >> "$verfile";
+		rm -f "$stage_file";
+		echo "$stage" >> "$stage_file";
 		sync;
 	fi
 
@@ -534,7 +646,7 @@ function make_target () {
 		if [[ ${BUILD_CONFIG_TARGET["MAKE_NOT_CLEAN"]} != true ]]; then
 			exec_make "-C $path distclean" "$target"
 		fi
-		[[ $command == distclean ]] || [[ $BUILD_CLEANALL == true ]] && rm -f "$verfile";
+		[[ $command == distclean ]] || [[ $BUILD_CLEANALL == true ]] && rm -f "$stage_file";
 		[[ $BUILD_CLEANALL == true ]] && return;
 		if [[ $command == distclean ]]; then
 			script_clean "$target"
@@ -544,7 +656,7 @@ function make_target () {
 
 	# make defconfig
 	if [[ ${mode["defconfig"]} == true ]]; then
-		if ! exec_make "-C $path $archopt $config" "$target"; then
+		if ! exec_make "-C $path $arch_option $config" "$target"; then
 			exit 1;
 		fi
 		[[ $command == defconfig ]] && exit 0;
@@ -552,7 +664,7 @@ function make_target () {
 
 	# make menuconfig
 	if [[ ${mode["menuconfig"]} == true ]]; then
-		exec_make "-C $path $archopt menuconfig" "$target";
+		exec_make "-C $path $arch_option menuconfig" "$target";
 		exit 0;
 	fi
 
@@ -561,12 +673,12 @@ function make_target () {
 	   [[ $command == rebuild ]] || [[ $command == cleanbuild ]]; then
 		for i in ${BUILD_CONFIG_TARGET["MAKE_TARGET"]}; do
 			i="$(echo "$i" | sed 's/[;,]//g') "
-			if ! exec_make "-C $path $archopt $i $opt" "$target"; then
+			if ! exec_make "-C $path $arch_option $i $build_option" "$target"; then
 				exit 1
 			fi
 		done
 	else
-		if ! exec_make "-C $path $archopt $command $opt" "$target"; then
+		if ! exec_make "-C $path $arch_option $command $build_option" "$target"; then
 			exit 1
 		fi
 	fi
@@ -641,10 +753,31 @@ function script_clean () {
 	fi
 }
 
+__build_target_stage=""
+
+function build_depend () {
+	local target=$1
+
+	for d in ${BUILD_CONFIG_TARGET["BUILD_DEPEND"]}; do
+		[[ -z $d ]] && continue;
+		# echo -e "\n\033[1;32m BUILD DEPEND       = $target ---> $d\033[0m";
+		build_target "$d";
+		parse_target "$target"
+	done
+}
+
 function build_target () {
 	local target=$1
 
 	parse_target "$target"
+
+	# build dependency
+	if [[ $BUILD_CHECK_DEPEND == true ]]; then
+		build_depend "$target"
+		if echo "$__build_target_stage" | grep -qwn "$target"; then return; fi
+		__build_target_stage+="$target "
+	fi
+
 	print_target "$target"
 	[[ $SHOW_INFO == true ]] && return;
 	if ! mkdir -p "${BUILD_CONFIG_ENV["RESULT_DIR"]}"; then exit 1; fi
@@ -693,8 +826,8 @@ function setup_config () {
 
 function store_config () {
 	local path=$1 script=$2
-	if [[ ! -f $(realpath "$BUILD_CONFIG_STATUS") ]]; then
-cat > "$BUILD_CONFIG_STATUS" <<EOF
+	if [[ ! -f $(realpath "$BUILD_CONFIG_SCRIPT_STATUS_FILE") ]]; then
+cat > "$BUILD_CONFIG_SCRIPT_STATUS_FILE" <<EOF
 PATH   = $(realpath "$BUILD_CONFIG_SCRIPT_DIR")
 CONFIG =
 EOF
@@ -705,19 +838,19 @@ EOF
 			err " No such directory: $path"
 			exit 1;
 		fi
-		sed -i "s|^PATH.*|PATH = $path|" "$BUILD_CONFIG_STATUS"
+		sed -i "s|^PATH.*|PATH = $path|" "$BUILD_CONFIG_SCRIPT_STATUS_FILE"
 	fi
 	if [[ -n $script ]]; then
 		if [[ ! -f $(realpath "$script") ]]; then
 			err " No such script: $path"
 			exit 1;
 		fi
-		sed -i "s/^CONFIG.*/CONFIG = $script/" "$BUILD_CONFIG_STATUS"
+		sed -i "s/^CONFIG.*/CONFIG = $script/" "$BUILD_CONFIG_SCRIPT_STATUS_FILE"
 	fi
 }
 
 function parse_config () {
-	local file=$BUILD_CONFIG_STATUS
+	local file=$BUILD_CONFIG_SCRIPT_STATUS_FILE
 	local str ret
 
 	[[ ! -f $file ]] && return;
@@ -735,8 +868,8 @@ function parse_config () {
 
 function avail_configs () {
 	local table=$1	# parse table
-	local prefix=$BUILD_CONFIG_PREFIX
-	local extension="sh"
+	local prefix=$BUILD_CONFIG_SCRIPT_PREFIX
+	local extension=$BUILD_CONFIG_SCRIPT_EXTENTION
 	local val value
 
 	if ! cd "$BUILD_CONFIG_SCRIPT_DIR"; then
@@ -812,7 +945,7 @@ function set_build_stage () {
 }
 
 function parse_args () {
-	while getopts "f:t:c:Cj:o:s:D:mAilevVh" opt; do
+	while getopts "f:t:c:Cj:o:s:D:mAilevVph" opt; do
 	case $opt in
 		f )	BUILD_CONFIG_SCRIPT=$(realpath "$OPTARG");;
 		t )	BUILD_RUN_TARGET=("$OPTARG")
@@ -822,19 +955,20 @@ function parse_args () {
 			done
 			;;
 		c )	BUILD_COMMAND="$OPTARG";;
-		m )	BUILD_TARGET_MANULA=true;;
-		A )	BUILD_TARGET_ALL=true;;
+		m )	BUILD_MANUAL_TARGETS=true;;
+		A )	BUILD_ALL_TAGETS=true;;
 		C )	BUILD_CLEANALL=true; BUILD_COMMAND="distclean";;
 		j )	BUILD_JOBS=$OPTARG;;
 		v )	DBG_VERBOSE=true;;
 		V )	DBG_VERBOSE=true; DBG_TRACE=true;;
-		o )	BUILD_OPTION="$OPTARG";;
+		p )	BUILD_CHECK_DEPEND=false;;
+		o )	BUILD_APPEND_OPTION="$OPTARG";;
 		D )	BUILD_CONFIG_SCRIPT_DIR=$(realpath "$OPTARG")
 			store_config "$BUILD_CONFIG_SCRIPT_DIR" ""
 			exit 0;;
 		i ) 	SHOW_INFO=true;;
 		l )	SHOW_LIST=true;;
-		e )	EDIT=true;
+		e )	EDIT_SCRIPT=true;
 			break;;
 		s ) 	set_build_stage "$OPTARG";;
 		h )	usage;
@@ -860,7 +994,7 @@ if [[ -z $BUILD_CONFIG_SCRIPT ]]; then
 	if [[ $* == *"menuconfig"* && $BUILD_COMMAND != "menuconfig" ]]; then
 		menu_config "$avail_list" "config" BUILD_CONFIG_SCRIPT
 		menu_save
-		msg "$(sed -e 's/^/ /' < "$BUILD_CONFIG_STATUS")"
+		msg "$(sed -e 's/^/ /' < "$BUILD_CONFIG_SCRIPT_STATUS_FILE")"
 		exit 0;
 	fi
 	if [[ -z $BUILD_CONFIG_SCRIPT ]]; then
@@ -872,7 +1006,7 @@ fi
 
 setup_config "$BUILD_CONFIG_SCRIPT"
 
-if [[ "${EDIT}" == true ]]; then
+if [[ "${EDIT_SCRIPT}" == true ]]; then
 	$EDIT_TOOL "$BUILD_CONFIG_SCRIPT"
 	exit 0;
 fi
