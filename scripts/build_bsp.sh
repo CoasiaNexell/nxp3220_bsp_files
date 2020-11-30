@@ -772,6 +772,7 @@ function build_target () {
 	if ! mkdir -p "${__build_env__["RESULT_DIR"]}"; then exit 1; fi
 	if ! mkdir -p "$__build_log_dir"; then exit 1; fi
 
+	setup_env "${__build_target__["CROSS_TOOL"]}"
 	run_script_prev "$target"
 	run_make "$target"
 	run_script_post "$target"
@@ -1001,5 +1002,4 @@ if [[ "${__edit_script}" == true ]]; then
 fi
 
 parse_env
-setup_env "${__build_env__["CROSS_TOOL"]}"
 build_run
