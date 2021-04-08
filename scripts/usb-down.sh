@@ -2,9 +2,13 @@
 # Copyright (c) 2018 Nexell Co., Ltd.
 # Author: Junghyun, Kim <jhkim@nexell.co.kr>
 
-BASEDIR=$(cd "$(dirname "$0")" && pwd)
-USBDOWNLOADER=linux-usbdownloader
-DOWNLOADER_TOOL="$BASEDIR/../bin/$USBDOWNLOADER"
+BASEDIR=$(realpath $(cd "$(dirname "$0")" && pwd))
+
+NXP3220_TOOLS_DIR="$BASEDIR/../bin"
+SLSIAP_TOOLS_DIR="$BASEDIR/../../s5pxx18/fusing_tools"
+nxp3220_usbdownloader="$NXP3220_TOOLS_DIR/linux-usbdownloader"
+slsiap_usbdownloader="$SLSIAP_TOOLS_DIR/usb-downloader"
+
 RESULTDIR=$(realpath "./")
 DN_DEVICE=
 USB_WAIT_TIME=	# sec
@@ -13,7 +17,16 @@ declare -A TARGET_PRODUCT_ID=(
 	["3220"]="nxp3220"	# VID 0x2375 : Digit
 	["3225"]="nxp3225"	# VID 0x2375 : Digit
 	["1234"]="artik310"	# VID 0x04e8 : Samsung
+	["1234"]="slsiap"	# VID 0x04e8 : Samsung
 )
+
+declare -A USBDOWNLOADER_BIN=(
+	["nxp3220"]="$nxp3220_usbdownloader"
+	["nxp3225"]="$nxp3220_usbdownloader"
+	["artik310"]="$nxp3220_usbdownloader"
+	["slsiap"]="$slsiap_usbdownloader"
+)
+usbdownloader_bin=""
 
 function err () { echo -e "\033[0;31m$*\033[0m"; }
 function msg () { echo -e "\033[0;33m$*\033[0m"; }
@@ -31,7 +44,7 @@ function usage () {
 	echo -e "\t-p\t encryted file transfer"
 	echo -e "\t-d\t download image path, default:'$RESULTDIR'"
 	echo -e "\t-t\t set usb device name, this name overwrite configs 'TARGET' field"
-	echo -e "\t\t support device [nxp3220,nxp3225,artik310]"
+	echo -e "\t\t support device [nxp3220,nxp3225,artik310,slsiap]"
 	echo -e ""
 }
 
@@ -86,12 +99,34 @@ function get_usb_device () {
 	exit 1;
 }
 
-function usb_download_config () {
+function usb_download () {
+	local device="$1" file="$2" argument="$3"
+	local devopt=${USBDOWNLOADER_BIN["$device"]}
+	local bin="$(echo $devopt | cut -d ':' -f1)"
+	local option command
+
+	if [[ -n ${argument} ]]; then
+		option=$argument
+	else
+		option=${devopt#$usbdownloader_bin}
+		[[ $option ]] && option="$(echo $devopt | cut -d ':' -f2)"
+		option="-f $file $option"
+	fi
+
+	command="${bin} -t ${device} ${option}"
+
+	msg " $> $command"
+	if ! sudo bash -c "${command}"; then
+		exit 1;
+	fi
+	msg " DOWNLOAD: DONE\n"
+}
+
+function usb_download_list () {
 	local device=""
 	local images=("${@}")	# IMAGES
 
 	get_prefix_element device "TARGET" "${images[@]}"
-
 	if [ -z "$DN_DEVICE" ]; then
 		get_usb_device device
 		DN_DEVICE=$device # set DN_DEVICE with config file
@@ -105,14 +140,14 @@ function usb_download_config () {
 	msg ""
 
 	for i in "${images[@]}"; do
-		local cmd file
+		local opts file
 		[[ "$i" = *"TARGET"* ]] && continue;
 		[[ "$i" = *"BOARD"* ]] && continue;
 
-		cmd=$(echo "$i" | cut -d':' -f 2)
-		cmd="$(echo "$cmd" | tr '\n' ' ')"
-		cmd="$(echo "$cmd" | sed 's/^[ \t]*//;s/[ \t]*$//')"
-		file=$(echo "$cmd" | cut -d' ' -f 2)
+		opts=$(echo "$i" | cut -d':' -f 2)
+		opts="$(echo "$opts" | tr '\n' ' ')"
+		opts="$(echo "$opts" | sed 's/^[ \t]*//;s/[ \t]*$//')"
+		file=$(echo "$opts" | cut -d' ' -f 2)
 
 		# reset load command with current file path
 		if [[ ! -e $file ]]; then
@@ -121,16 +156,12 @@ function usb_download_config () {
 				err " DOWNLOAD: No such file $file"
 				exit 1
 			fi
-			local opt="$(echo "$cmd" | cut -d' ' -f 1)"
+			local opt="$(echo "$opts" | cut -d' ' -f 1)"
 			file=./$file
-			cmd="$opt $file"
+			opts="$opt $file"
 		fi
 
-		msg " DOWNLOAD: $cmd"
-		if ! sudo "$DOWNLOADER_TOOL" -t "$device" $cmd; then
-			exit 1;
-		fi
-		msg " DOWNLOAD: DONE\n"
+		usb_download "$device" "" "$opts"
 
 		sleep "$DN_SLEEP_SEC"	# wait for next connect
 	done
@@ -138,7 +169,7 @@ function usb_download_config () {
 
 # input parameters
 # $1 = download file array
-function usb_download_targets () {
+function usb_download_image () {
 	local files=("${@}")	# IMAGES
 	local device=$DN_DEVICE
 
@@ -164,12 +195,7 @@ function usb_download_targets () {
 			exit 1;
 		fi
 
-		msg " DOWNLOAD: $i"
-		if ! sudo "$DOWNLOADER_TOOL" -t "$device" -f "$i"; then
-			exit 1;
-		fi
-		msg " DOWNLOAD: DONE\n"
-
+		usb_download "$device" "$i" ""
 		sleep "$DN_SLEEP_SEC"
 	done
 }
@@ -212,10 +238,6 @@ if [[ $EDIT_FILE == true ]]; then
 	exit 0
 fi
 
-if [[ ! -f $DOWNLOADER_TOOL ]]; then
-	DOWNLOADER_TOOL="./$USBDOWNLOADER"
-fi
-
 if [[ ! -z $DN_LOAD_CONFIG ]]; then
 	if [[ ! -f $DN_LOAD_CONFIG ]]; then
 		err " No such config: $DN_LOAD_CONFIG"
@@ -226,12 +248,12 @@ if [[ ! -z $DN_LOAD_CONFIG ]]; then
 	source "$DN_LOAD_CONFIG"
 
 	if [[ $DN_ENCRYPTED == false ]]; then
-		usb_download_config "${DN_IMAGES[@]}"
+		usb_download_list "${DN_IMAGES[@]}"
 	else
-		usb_download_config "${DN_ENC_IMAGES[@]}"
+		usb_download_list "${DN_ENC_IMAGES[@]}"
 	fi
 fi
 
 if [[ ${#DN_LOAD_TARGETS} -ne 0 ]]; then
-	usb_download_targets "${DN_LOAD_TARGETS[@]}"
+	usb_download_image "${DN_LOAD_TARGETS[@]}"
 fi
